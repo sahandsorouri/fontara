@@ -110,8 +110,10 @@ export const DEFAULT_VALUES = {
 }
 
 export const URLS = {
-  WELCOME_PAGE: "https://mimalef70.github.io/fontara",
-  CHANGELOG: "https://mimalef70.github.io/fontara#changelogs"
+  // Local version - no external connections
+  // These will be resolved at runtime by the extension
+  WELCOME_PAGE: "docs/index.html",
+  CHANGELOG: "docs/index.html"
 }
 
 export const CUSTOM_CSS = {

@@ -120,16 +120,19 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   try {
     if (details.reason === "install") {
       await ensureStorageValues()
-      chrome.tabs.create({ url: URLS.WELCOME_PAGE })
+      // Open local welcome page
+      chrome.tabs.create({ url: chrome.runtime.getURL(URLS.WELCOME_PAGE) })
     } else if (details.reason === "update") {
       await ensureStorageValues()
-      chrome.tabs.create({ url: URLS.CHANGELOG })
+      // Open local changelog page
+      chrome.tabs.create({ url: chrome.runtime.getURL(URLS.CHANGELOG) })
     }
   } catch (error) {
     //console.error("Error during extension installation/update:", error)
   }
 })
 
-chrome.runtime.setUninstallURL(
-  "https://app.mu.chat/forms/cm7x2dyjo0ajl01lfci211xev"
-)
+// Removed uninstall URL for complete privacy - no external connections
+// chrome.runtime.setUninstallURL(
+//   "https://app.mu.chat/forms/cm7x2dyjo0ajl01lfci211xev"
+// )

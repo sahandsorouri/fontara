@@ -20,6 +20,34 @@ const storageLocal = new Storage({
 })
 
 let observer: MutationObserver | null = null
+let processingQueue: Set<HTMLElement> = new Set()
+let processingTimer: number | null = null
+let isProcessing = false
+let isPageVisible = !document.hidden
+
+// Track page visibility to pause processing when tab is not active
+document.addEventListener("visibilitychange", () => {
+  isPageVisible = !document.hidden
+  if (isPageVisible && processingQueue.size > 0) {
+    // Resume processing when page becomes visible
+    processBatch()
+  }
+})
+
+// Performance optimization: Debounce function
+function debounce(func: Function, wait: number) {
+  let timeout: number | null = null
+  return function executedFunction(...args: any[]) {
+    const later = () => {
+      timeout = null
+      func(...args)
+    }
+    if (timeout !== null) {
+      clearTimeout(timeout)
+    }
+    timeout = window.setTimeout(later, wait)
+  }
+}
 
 async function injectFontStyles(): Promise<boolean> {
   const currentUrl = window.location.href
@@ -38,7 +66,6 @@ async function injectFontStyles(): Promise<boolean> {
     // Create style element for built-in fonts
     const style = document.createElement("style")
     style.id = "fontara-font-styles"
-    // style.textContent = styleText
     style.textContent = getFonts()
     document.head.appendChild(style)
 
@@ -122,6 +149,16 @@ async function injectFontStyles(): Promise<boolean> {
 
 function removeFontStyles() {
   try {
+    // Stop observing first
+    stopObserving()
+
+    // Clear processing queue
+    processingQueue.clear()
+    if (processingTimer !== null) {
+      clearTimeout(processingTimer)
+      processingTimer = null
+    }
+
     // Remove the font styles
     const fontStyles = document.getElementById("fontara-font-styles")
     if (fontStyles) {
@@ -134,13 +171,13 @@ function removeFontStyles() {
       dynamicFont.remove()
     }
 
-    // Remove the dynamic font variable
+    // Remove the custom font styles
     const customFont = document.getElementById("fontara-custom-font-styles")
     if (customFont) {
       customFont.remove()
     }
 
-    // Remove the dynamic css variable
+    // Remove the custom css
     const customCss = document.getElementById("fontara-custom-css-style")
     if (customCss) {
       customCss.remove()
@@ -150,7 +187,6 @@ function removeFontStyles() {
     const allElements = document.querySelectorAll("[style*='fontara-font']")
     allElements.forEach((element) => {
       if (element instanceof HTMLElement) {
-        // Simply remove the inline style to revert to original style
         element.style.fontFamily = ""
         if (element.style.length === 0) {
           element.removeAttribute("style")
@@ -163,56 +199,84 @@ function removeFontStyles() {
 }
 
 function processElement(node: HTMLElement): void {
-  // node.setAttribute("data-fontara-processed", "true")
+  try {
+    // Quick checks first (no DOM operations)
+    const tagName = node.tagName.toLowerCase()
+    if (excludedTags.includes(tagName)) {
+      return
+    }
 
-  if (excludedTags.includes(node.tagName.toLowerCase())) {
-    return
+    // Check for icon classes (fast check)
+    const classList = node.classList
+    if (classList.length > 0) {
+      for (let i = 0; i < iconClasses.length; i++) {
+        if (classList.contains(iconClasses[i])) {
+          return
+        }
+      }
+    }
+
+    // Check for icon fonts
+    const computedStyle = window.getComputedStyle(node)
+    const fontFamily = computedStyle.fontFamily.toLowerCase()
+    
+    if (
+      fontFamily.includes("fontawesome") ||
+      fontFamily.includes("material") ||
+      fontFamily.includes("icon") ||
+      fontFamily.includes("glyphicon")
+    ) {
+      return
+    }
+
+    // Parse the font family correctly, handling quotes properly
+    const fontFamilies = computedStyle.fontFamily
+      .split(",")
+      .map((f) => f.trim().replace(/^["']+|["']+$/g, ""))
+      .filter((f) => !f.includes("-Fontara") && Boolean(f))
+
+    const cleanFontFamily = fontFamilies.join(", ")
+
+    // Apply font family with CSS variable
+    node.setAttribute(
+      "style",
+      `font-family: var(--fontara-font)${cleanFontFamily ? `, ${cleanFontFamily}` : ""} !important; ${node.getAttribute("style") || ""}`
+    )
+  } catch (err) {
+    // Silently fail for problematic elements
   }
+}
 
-  // Check if the node has visible text content (excluding child elements)
-  // const hasText = Array.from(node.childNodes).some(
-  //   (child) =>
-  //     child.nodeType === Node.TEXT_NODE && child.textContent.trim().length > 0
-  // )
+// Batch processing with idle callback for better performance
+function processBatch() {
+  // Don't process if page is hidden or already processing
+  if (!isPageVisible || isProcessing || processingQueue.size === 0) return
 
-  // // If node doesn't have text content, don't change its font
-  // if (!hasText) {
-  //   return
-  // }
+  isProcessing = true
+  const batch = Array.from(processingQueue).slice(0, 50) // Process 50 at a time
+  
+  batch.forEach((element) => {
+    try {
+      // Double-check element is still in DOM
+      if (element.isConnected) {
+        processElement(element)
+      }
+    } catch (err) {
+      // Skip problematic elements
+    }
+    processingQueue.delete(element)
+  })
 
-  const isIcon = iconClasses.some(
-    (className) =>
-      node.classList.contains(className) ||
-      node.closest(`.${className}`) !== null
-  )
+  isProcessing = false
 
-  const computedStyle = window.getComputedStyle(node)
-  let fontFamily = computedStyle.fontFamily
-  const isIconFont =
-    fontFamily.toLowerCase().includes("fontawesome") ||
-    fontFamily.toLowerCase().includes("material") ||
-    fontFamily.toLowerCase().includes("icon") ||
-    fontFamily.toLowerCase().includes("glyphicon")
-
-  if (isIcon || isIconFont) {
-    return
+  // Continue processing if there are more items and page is visible
+  if (processingQueue.size > 0 && isPageVisible) {
+    if ("requestIdleCallback" in window) {
+      requestIdleCallback(() => processBatch(), { timeout: 100 })
+    } else {
+      setTimeout(processBatch, 16) // ~60fps fallback
+    }
   }
-
-  // Parse the font family correctly, handling quotes properly
-  const fontFamilies = fontFamily
-    .split(",")
-    .map((f) => f.trim().replace(/^["']+|["']+$/g, "")) // Remove quotes
-    .filter((f) => !f.includes("-Fontara") && Boolean(f)) // Remove fontara fonts and empty entries
-
-  const cleanFontFamily = fontFamilies.join(", ")
-
-  // Apply the new font-family without duplicating
-  // node.style.fontFamily = `var(--fontara-font), ${cleanFontFamily} !important`
-  // node.style.fontFamily = `var(--fontara-font), ${cleanFontFamily}`
-  node.setAttribute(
-    "style",
-    `font-family: var(--fontara-font)${cleanFontFamily ? `, ${cleanFontFamily}` : ""} !important; ${node.getAttribute("style") || ""}`
-  )
 }
 
 export async function getAllElementsWithFontFamily(
@@ -222,11 +286,28 @@ export async function getAllElementsWithFontFamily(
 
   const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_ELEMENT)
   let node = walker.nextNode()
+  
+  let count = 0
+  const batchSize = 50 // Process in batches
+  
   while (node) {
     if (node instanceof HTMLElement) {
-      processElement(node as HTMLElement)
+      processingQueue.add(node)
+      count++
+      
+      // Process batch every 50 elements to prevent blocking
+      if (count % batchSize === 0) {
+        await new Promise(resolve => setTimeout(resolve, 0)) // Yield to browser
+      }
     }
     node = walker.nextNode()
+  }
+
+  // Start batch processing
+  if ("requestIdleCallback" in window) {
+    requestIdleCallback(() => processBatch(), { timeout: 100 })
+  } else {
+    setTimeout(processBatch, 16)
   }
 }
 
@@ -255,38 +336,62 @@ async function applyFontsIfActive() {
   }
 }
 
+// Debounced handler for mutations
+const debouncedMutationHandler = debounce(() => {
+  if (processingQueue.size > 0) {
+    processBatch()
+  }
+}, 150) // Wait 150ms after last mutation before processing
+
 function startObserving() {
   if (observer) {
-    // If already observing, disconnect first to avoid multiple observers
     stopObserving()
   }
 
-  observer = new MutationObserver(async (mutations: MutationRecord[]) => {
+  observer = new MutationObserver((mutations: MutationRecord[]) => {
+    // Collect all added nodes first
+    const addedNodes: HTMLElement[] = []
+    
     for (const mutation of mutations) {
       if (mutation.type === "childList") {
-        for (const node of mutation.addedNodes) {
+        // Convert NodeList to Array for iteration
+        Array.from(mutation.addedNodes).forEach((node) => {
           if (node instanceof HTMLElement) {
-            getAllElementsWithFontFamily(node)
+            // Skip small text nodes and already processed elements
+            if (!node.hasAttribute("data-fontara-processed")) {
+              addedNodes.push(node)
+            }
           }
-        }
+        })
       }
-      // else if (
-      //   mutation.type === "characterData" &&
-      //   mutation.target.parentElement instanceof HTMLElement
-      // ) {
-      //   getAllElementsWithFontFamily(mutation.target.parentElement)
-      // }
-      // else if (mutation.target instanceof HTMLElement) {
-      //   // For input/textarea values and other element changes
-      //   getAllElementsWithFontFamily(mutation.target)
-      // }
     }
+
+    // If we have many nodes, only process visible ones
+    if (addedNodes.length > 100) {
+      // Large batch - only add visible elements to queue
+      addedNodes.forEach((node) => {
+        if (node.offsetParent !== null || node.tagName.toLowerCase() === "body") {
+          processingQueue.add(node)
+        }
+      })
+    } else {
+      // Small batch - process all
+      addedNodes.forEach((node) => {
+        processingQueue.add(node)
+      })
+    }
+
+    // Debounce the processing
+    debouncedMutationHandler()
   })
 
   if (document.body) {
     observer.observe(document.body, {
       subtree: true,
-      childList: true
+      childList: true,
+      // Don't observe attributes or characterData for better performance
+      attributes: false,
+      characterData: false
     })
   }
 }
@@ -296,6 +401,10 @@ function stopObserving() {
     observer.disconnect()
     observer = null
   }
+  
+  // Clear any pending processing
+  processingQueue.clear()
+  isProcessing = false
 }
 
 function updateFontVariable(fontName: string) {

@@ -89,7 +89,7 @@
       "tabs"
     ],
     "content_security_policy": {
-      "extension_pages": "script-src 'self'; object-src 'self'; font-src 'self' https://fonts.gstatic.com data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;"
+      "extension_pages": "script-src 'self'; object-src 'self'; font-src 'self' data:; style-src 'self' 'unsafe-inline';"
     },
     "browser_specific_settings": {
       "gecko": {
